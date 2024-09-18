@@ -1,14 +1,18 @@
 import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
+from collections import OrderedDict
 
 
 # Class to handle data fetching and Bollinger Bands calculation
 class tickerData:
     def __init__(self, tickers):
         self.tickers = tickers if isinstance(tickers, list) else [tickers]
+        # checks if "tickers" is a list. ->true,it gets passed into self.tickers, else wraps string into [] and passes
         self.data = {}  # dict for ticker(key), value(dataframe) pair
-        self.bollinger_data = {} # dict for bolinger data
+        self.bollinger_data = OrderedDict() # dict for bollinger data - sma(key), ticker(value)
+        self.cache_limit = 5 # cache limit is 5
+        self.sma_data = {}  # dict for sma data - same as self.bollinger_data
 
         # Fetch data for all tickers
         for ticker in self.tickers:
@@ -17,35 +21,35 @@ class tickerData:
     def get_data(self, ticker):
         return self.data[ticker]
 
+    # Method to calculate Bollinger Bands. this will also prevent calc of bollinger band if not called, this method
+    def getBollData(self, sma):
+        # Check if the SMA is already in the cache
+        if sma in self.bollinger_data:
+            return self.bollinger_data[sma]
 
-   # def plotData(self,tickers_to_plot):
+        # If the cache is full, remove the oldest entry
+        if len(self.bollinger_data) >= self.cache_limit:
+            self.bollinger_data.popitem(last=False)
 
+        # Initialize the dictionary for the specified SMA
+        self.bollinger_data[sma] = {}  # Initialize the nested dictionary for this SMA
 
-
-    # Method to calculate Bollinger Bands
-    #this will also prevent calc of bollinger band if not called
-    # this method is not meant to be called by user
-    def bg(self, sma):
-        if sma not in self.bollinger_data:
-            self.bollinger_data[sma] = {}
-
+        # Calculate and store Bollinger Bands for each ticker
         for ticker in self.tickers:
-            if ticker not in self.bollinger_data[sma]:
-                df = self.data[ticker]
-                df[f"Close{sma}SMA"] = df["Close"].rolling(window=sma).mean()
-                df[f"{sma}SMA2SD"] = df["Close"].rolling(window=sma).std() * 2
-                df[f"{sma}SMA+"] = df[f"Close{sma}SMA"] + df[f"{sma}SMA2SD"]
-                df[f"{sma}SMA-"] = df[f"Close{sma}SMA"] - df[f"{sma}SMA2SD"]
-                # Store result in a dictionary for each ticker
-                self.bollinger_data[sma][ticker] = df[[f"Close{sma}SMA", f"{sma}SMA-", f"{sma}SMA+", "Close"]]
+            df = self.data[ticker]
+            df[f"Close{sma}SMA"] = df["Close"].rolling(window=sma).mean()
+            df[f"{sma}SMA2SD"] = df["Close"].rolling(window=sma).std() * 2
+            df[f"{sma}SMA+"] = df[f"Close{sma}SMA"] + df[f"{sma}SMA2SD"]
+            df[f"{sma}SMA-"] = df[f"Close{sma}SMA"] - df[f"{sma}SMA2SD"]
+            # Store result in a dictionary for each ticker
+            self.bollinger_data[sma][ticker] = df[[f"Close{sma}SMA", f"{sma}SMA-", f"{sma}SMA+", "Close"]]
 
-        return self.bollinger_data[sma]
+        return self.bollinger_data[sma] # returns dict with key - ticker and value - dataframe with sma data+ boll data
 
     # Plot multiple stocks on the same graph
-    def plot_bollinger(self, sma, tickers_to_plot, tail = None):
+    def plot_bollinger(self, tickers_to_plot, sma, tail = None):
         # Get Bollinger Bands for tickers to plot (without recalculating if already available)
-        bollinger_data = self.bg(sma)
-
+        bollinger_data = self.getBollData(sma)
         plt.figure(figsize=(10, 6))
 
         if len(tickers_to_plot) > 1:  # check if user wants to plot multiple stocks
@@ -85,9 +89,101 @@ class tickerData:
             plt.grid(True)
             plt.show()
 
-#test
+    def getSMAdata(self, sma_list):
+        sma_data = {}
 
+        for ticker in self.tickers:
+            if ticker not in self.sma_data:
+                df = self.data[ticker].copy()
+
+                for sma in sma_list:
+                    df[f"Close{sma}SMA"] = df["Close"].rolling(window=sma).mean()
+
+                sma_columns = ['Close'] + [f"Close{sma}SMA" for sma in sma_list]
+                sma_data[ticker] = df[sma_columns]
+
+                # Cache the results
+                self.sma_data[ticker] = sma_data[ticker]
+            else:
+                sma_data[ticker] = self.sma_data[ticker]  # Use cached result
+
+        return sma_data
+
+    def plot_sma(self, tickers_to_plot, sma, tail=None):
+        """
+        Plot the SMA for multiple stocks using a single SMA value.
+        """
+        # Ensure sma is passed as a list
+        sma_data = self.getSMAdata([sma])
+
+        plt.figure(figsize=(10, 6))
+
+        if len(tickers_to_plot) > 1:  # check if user wants to plot multiple stocks
+            for ticker in tickers_to_plot:  # Get data for each ticker
+                df_raw = sma_data[ticker]
+                df = df_raw[["Close", f"Close{sma}SMA"]]
+
+                if tail:
+                    df = df.tail(tail)
+
+                plt.plot(df.index, df['Close'], label=f"{ticker} Close", alpha=0.7)
+                plt.plot(df.index, df[f"Close{sma}SMA"], label=f"{ticker} {sma} SMA", alpha=0.7)
+
+            plt.title(f"Simple moving Average ({sma}-SMA) for Multiple Stocks")
+            plt.xlabel("Date")
+            plt.ylabel("Price")
+            plt.legend(loc="best")
+            plt.grid(True)
+            plt.show()
+
+        else:
+            ticker = tickers_to_plot[0]
+            df_raw = sma_data[ticker]
+            df = df_raw[["Close", f"Close{sma}SMA"]]  # Fixed the column slicing
+
+            if tail:
+                df = df.tail(tail)
+
+            plt.plot(df.index, df['Close'], label=f"{ticker} Close", alpha=0.7)
+            plt.plot(df.index, df[f"Close{sma}SMA"], label=f"{ticker} {sma} SMA", alpha=0.7)
+
+            plt.title(f"Simple moving Average ({sma}-SMA) for {ticker}")
+            plt.xlabel("Date")
+            plt.ylabel("Price")
+            plt.legend(loc="best")
+            plt.grid(True)
+            plt.show()
+
+    def plot_multiple_smas(self, ticker, sma_list, tail=None):
+        """
+        Plot multiple SMAs for a single stock.
+        """
+        sma_data = self.getSMAdata(sma_list)
+        df = sma_data[ticker]
+        plt.figure(figsize=(10, 6))
+
+        if tail:
+            df = df.tail(tail)
+
+        # Plot the closing price
+        plt.plot(df.index, df['Close'], label=f"{ticker} Close", alpha=0.7)
+
+        # Plot each SMA
+        for sma in sma_list:
+            plt.plot(df.index, df[f"Close{sma}SMA"], label=f"{sma}-SMA", alpha=0.7)
+
+        plt.title(f"Multiple SMAs for {ticker}")
+        plt.xlabel("Date")
+        plt.ylabel("Price")
+        plt.legend(loc="best")
+        plt.grid(True)
+        plt.show()
+
+# Example usage:
 tickers = ['AAPL', 'GOOG', 'MSFT']
 stocks = tickerData(tickers)
 
-stocks.plot_bollinger(20,["GOOG"],100 )
+test = stocks.getBollData(20)
+
+
+stocks.plot_sma(["GOOG","AAPL"],20, tail = 100)
